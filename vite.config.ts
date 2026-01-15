@@ -11,10 +11,10 @@ export default defineConfig({
     outDir: 'dist',
     sourcemap: false,
     minify: 'terser',
-  },
-  optimizeDeps: {
-    esbuildOptions: {
-      target: 'es2020',
+    rollupOptions: {
+      input: {
+        main: '/index.html',
+      },
     },
   },
 })
