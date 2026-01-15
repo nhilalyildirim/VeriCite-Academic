@@ -1,58 +1,31 @@
-import { GoogleGenAI, Type } from "@google/genai";
-import {
-  Citation,
-  CitationStatus,
-  VerificationResult
-} from "../types";
 
-/* =========================
-   GEMINI CLIENT
-========================= */
+import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
+import { Citation, CitationStatus, VerificationResult } from "../types";
 
-const ai = new GoogleGenAI({
-  apiKey: import.meta.env.VITE_GEMINI_API_KEY
-});
-
-/* =========================
-   CROSSREF LOOKUP
-========================= */
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 async function fetchCrossrefMetadata(doi: string) {
   try {
-    const clean = doi.replace(/^https?:\/\/(dx\.)?doi\.org\//, "");
-    const res = await fetch(
-      `https://api.crossref.org/works/${encodeURIComponent(clean)}`
-    );
-    if (!res.ok) return null;
-    const json = await res.json();
+    const cleanDoi = doi.replace(/^(https?:\/\/)?(dx\.)?doi\.org\//, "").trim();
+    const response = await fetch(`https://api.crossref.org/works/${encodeURIComponent(cleanDoi)}`, {
+      headers: { 'Accept': 'application/json' }
+    });
+    if (!response.ok) return null;
+    const json = await response.json();
     return json.message;
-  } catch {
+  } catch (e) {
+    console.error("Crossref lookup failed:", e);
     return null;
   }
 }
 
-/* =========================
-   MAIN EXPORT USED BY App.tsx
-========================= */
-
-export async function parseAndVerifyCitations(
-  text: string
-): Promise<VerificationResult> {
-
-  /* ---- 1. EXTRACT CITATIONS ---- */
-
-  const extract = await ai.models.generateContent({
-    model: "gemini-1.5-flash",
-    contents: `
-Extract all academic citations.
-
-Return JSON array only.
-Fields:
-id, rawText, title, authors[], year, doi
-
-TEXT:
-${text}
-    `,
+export const parseAndVerifyCitations = async (text: string): Promise<VerificationResult> => {
+  const parsingResponse = await ai.models.generateContent({
+    model: 'gemini-3-flash-preview',
+    contents: `Extract all academic citations from this text. Identify in-text, parenthetical, or numbered references. 
+    Return a JSON array of objects with id, rawText, title, authors[], year, and doi.
+    
+    TEXT: ${text}`,
     config: {
       responseMimeType: "application/json",
       responseSchema: {
@@ -63,10 +36,7 @@ ${text}
             id: { type: Type.STRING },
             rawText: { type: Type.STRING },
             title: { type: Type.STRING },
-            authors: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING }
-            },
+            authors: { type: Type.ARRAY, items: { type: Type.STRING } },
             year: { type: Type.STRING },
             doi: { type: Type.STRING }
           },
@@ -76,104 +46,163 @@ ${text}
     }
   });
 
-  const extracted = JSON.parse(extract.text);
-  const citations: Citation[] = [];
+  const extractedCitations = JSON.parse(parsingResponse.text) as any[];
+  let citations: Citation[] = [];
 
-  /* ---- 2. VERIFY ---- */
-
-  for (const item of extracted) {
+  for (const item of extractedCitations) {
     let doi = item.doi;
-
     if (!doi) {
-      const m = item.rawText.match(/\b10\.\d{4,9}\/\S+\b/i);
-      if (m) doi = m[0];
+      const doiRegex = /\b(10[.][0-9]{4,}(?:[.][0-9]+)*\/(?:(?!["&\'<>])\S)+)\b/i;
+      const match = item.rawText.match(doiRegex);
+      if (match) doi = match[0];
     }
 
-    const crossref = doi ? await fetchCrossrefMetadata(doi) : null;
+    let crossrefData = doi ? await fetchCrossrefMetadata(doi) : null;
+    
+    const verificationPrompt = `You are an academic integrity auditor. Verify if this source exists: "${item.rawText}".
+    
+    STRICT RULES:
+    1. A source is "VERIFIED" ONLY if: 
+       - Title, Author, and Year (±1) match exactly across TWO or more independent scholarly databases.
+    2. If metadata is missing or mismatched, it is "UNVERIFIABLE".
+    3. If there are strong indicators of fabrication, it is "HALLUCINATION".
+    
+    Accuracy is more important than being helpful. If unsure, mark as UNVERIFIABLE.`;
 
-    const verify = await ai.models.generateContent({
-      model: "gemini-1.5-flash",
-      contents: `
-Is this a real academic source?
-
-"${item.rawText}"
-
-Answer as:
-VERIFIED / UNVERIFIABLE / HALLUCINATION
-      `
+    const verifyResponse = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: verificationPrompt,
+      config: {
+        tools: [{ googleSearch: {} }]
+      }
     });
 
-    const r = verify.text.toLowerCase();
-
+    const groundingMetadata = verifyResponse.candidates?.[0]?.groundingMetadata;
+    const groundingChunks = groundingMetadata?.groundingChunks || [];
+    const sourceUrl = groundingChunks[0]?.web?.uri || (doi ? `https://doi.org/${doi}` : undefined);
+    
+    const responseText = verifyResponse.text.toLowerCase();
     let status = CitationStatus.UNVERIFIED;
     let confidence = 0.5;
 
-    if (r.includes("hallucination")) {
+    if (crossrefData || responseText.includes("verified") || groundingChunks.length >= 1) {
+      const hasDoiMatch = !!crossrefData;
+      const hasSearchMatch = groundingChunks.length >= 1;
+      
+      if (hasDoiMatch && hasSearchMatch) {
+        status = CitationStatus.VERIFIED;
+        confidence = 0.99;
+      } else if (hasDoiMatch || hasSearchMatch) {
+        status = CitationStatus.PARTIAL_MATCH;
+        confidence = 0.75;
+      }
+    } 
+    
+    if (responseText.includes("hallucinated") || responseText.includes("fabricated") || responseText.includes("fake")) {
       status = CitationStatus.HALLUCINATION;
       confidence = 0.95;
-    } else if (crossref || r.includes("verified")) {
-      status = CitationStatus.VERIFIED;
-      confidence = 0.98;
     }
 
     citations.push({
-      id: item.id,
+      id: item.id || Math.random().toString(36).substr(2, 9),
       rawText: item.rawText,
       parsedMetadata: {
-        title: crossref?.title?.[0] ?? item.title,
-        authors:
-          crossref?.author?.map(
-            (a: any) => `${a.given} ${a.family}`
-          ) ?? item.authors,
-        year:
-          crossref?.issued?.["date-parts"]?.[0]?.[0]?.toString() ??
-          item.year,
-        doi
+        title: crossrefData?.title?.[0] || item.title,
+        authors: crossrefData?.author?.map((a: any) => `${a.given} ${a.family}`) || item.authors,
+        year: crossrefData?.created?.['date-parts']?.[0]?.[0]?.toString() || item.year,
+        doi: doi
       },
       status,
       confidenceScore: confidence,
-      sourceUrl: doi ? `https://doi.org/${doi}` : undefined,
-      explanation: verify.text,
-      verificationSource: crossref ? "Crossref" : "Gemini"
+      sourceUrl: sourceUrl,
+      explanation: verifyResponse.text,
+      verificationSource: (crossrefData ? "Crossref " : "") + (groundingChunks.length > 0 ? "+ Web Scholarly Index" : "")
     });
   }
 
-  /* ---- 3. BIBLIOGRAPHY ---- */
+  // Self-Correction Review Step
+  const reviewResponse = await ai.models.generateContent({
+    model: 'gemini-3-flash-preview',
+    contents: `Review these citation verification results as a skeptic. Downgrade 'VERIFIED' to 'UNVERIFIABLE' if confidence is not absolute.
+    
+    DATA: ${JSON.stringify(citations)}`,
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            id: { type: Type.STRING },
+            newStatus: { type: Type.STRING },
+            reasoning: { type: Type.STRING }
+          },
+          required: ["id", "newStatus", "reasoning"]
+        }
+      }
+    }
+  });
 
-  const verified = citations.filter(
-    c => c.status === CitationStatus.VERIFIED
-  );
+  const reviews = JSON.parse(reviewResponse.text);
+  citations = citations.map(c => {
+    const review = reviews.find((r: any) => r.id === c.id);
+    if (review && review.newStatus !== c.status) {
+      return { 
+        ...c, 
+        status: review.newStatus as CitationStatus, 
+        explanation: `${c.explanation}\n\n[Skeptic Review]: ${review.reasoning}` 
+      };
+    }
+    return c;
+  });
 
+  // Generate Multi-Style Bibliography for ONLY verified sources
+  const verifiedCitations = citations.filter(c => c.status === CitationStatus.VERIFIED);
   let multiStyleBib = undefined;
-
-  if (verified.length > 0) {
-    const bib = await ai.models.generateContent({
-      model: "gemini-1.5-flash",
-      contents: `
-Generate APA, MLA, Chicago and IEEE bibliographies.
-Return JSON.
-
-DATA:
-${JSON.stringify(verified)}
-      `,
-      config: { responseMimeType: "application/json" }
+  
+  if (verifiedCitations.length > 0) {
+    const bibResponse = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: `Generate clean bibliographies for these verified sources in APA 7, MLA, Chicago, and IEEE styles.
+      Return as a JSON object with keys: apa, mla, chicago, ieee.
+      
+      DATA: ${JSON.stringify(verifiedCitations)}`,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            apa: { type: Type.STRING },
+            mla: { type: Type.STRING },
+            chicago: { type: Type.STRING },
+            ieee: { type: Type.STRING }
+          },
+          required: ["apa", "mla", "chicago", "ieee"]
+        }
+      }
     });
-
-    multiStyleBib = JSON.parse(bib.text);
+    multiStyleBib = JSON.parse(bibResponse.text);
   }
 
   return {
     citations,
     summary: {
       total: citations.length,
-      verified: verified.length,
-      hallucinated: citations.filter(
-        c => c.status === CitationStatus.HALLUCINATION
-      ).length,
-      unverified: citations.filter(
-        c => c.status === CitationStatus.UNVERIFIED
-      ).length
+      verified: citations.filter(c => c.status === CitationStatus.VERIFIED).length,
+      hallucinated: citations.filter(c => c.status === CitationStatus.HALLUCINATION).length,
+      unverified: citations.filter(c => c.status === CitationStatus.UNVERIFIED || c.status === CitationStatus.PARTIAL_MATCH).length
     },
     multiStyleBib
   };
-}
+};
+
+export const exportBibliography = async (citations: Citation[], style: string): Promise<string> => {
+  const response = await ai.models.generateContent({
+    model: 'gemini-3-flash-preview',
+    contents: `Generate a clean, professional bibliography in ${style} style. 
+    Only include sources verified as REAL.
+    
+    DATA: ${JSON.stringify(citations.filter(c => c.status === CitationStatus.VERIFIED))}`
+  });
+  return response.text;
+};
