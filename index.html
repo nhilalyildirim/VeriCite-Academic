@@ -1,45 +1,42 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>VeriCite Academic</title>
-
-  <script src="https://cdn.tailwindcss.com"></script>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-
-  <style>
-    body { font-family: 'Inter', sans-serif; }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VeriCite Academic | Scholarly Verification Engine</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f8fafc;
+        }
+        .mono { font-family: 'JetBrains Mono', monospace; }
+        .gradient-bg { background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); }
+        @media print {
+            .no-print { display: none; }
+        }
+    </style>
+<script type="importmap">
+{
+  "imports": {
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "lucide-react": "https://esm.sh/lucide-react@^0.562.0",
+    "@google/genai": "https://esm.sh/@google/genai@^1.36.0",
+    "recharts": "https://esm.sh/recharts@^3.6.0",
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "react": "https://esm.sh/react@^19.2.3",
+    "jspdf": "https://esm.sh/jspdf@^2.5.1"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
 </head>
+<body>
+    <div id="root"></div>
+<script type="module" src="/index.tsx"></script>
+</body>
+</html>
 
-<body class="bg-slate-50 text-slate-800">
-
-  <!-- Header -->
-  <header class="bg-slate-900 text-white py-6">
-    <div class="max-w-5xl mx-auto px-4">
-      <h1 class="text-3xl font-semibold">VeriCite Academic</h1>
-      <p class="text-slate-300 mt-1">
-        Accurate Academic Citation Verification & Reference Intelligence
-      </p>
-    </div>
-  </header>
-
-  <!-- Main -->
-  <main class="max-w-5xl mx-auto px-4 py-12">
-
-    <section class="mb-12">
-      <h2 class="text-2xl font-semibold mb-4">What is VeriCite?</h2>
-      <p class="text-slate-700 leading-relaxed">
-        VeriCite Academic is an AI-powered scholarly verification platform that analyzes
-        in-text citations and reference lists, detects fabricated or AI-hallucinated sources,
-        and validates references against real academic databases.
-      </p>
-    </section>
-
-    <section class="grid md:grid-cols-3 gap-6 mb-12">
-      <div class="bg-white p-6 rounded-xl shadow">
-        <h3 class="font-semibold mb-2">Citation Detection</h3>
-        <p class="text-sm text-slate-600">
-          Aut
 
