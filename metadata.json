@@ -1,8 +1,0 @@
-{
-  "name": "VeriCite Academic",
-  "description": "A production-ready academic citation verification platform that detects, parses, and validates scholarly references against real-world databases to identify hallucinations.",
-  "requestFramePermissions": [
-    "camera",
-    "microphone"
-  ]
-}
